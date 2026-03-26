@@ -1,0 +1,13 @@
+{
+  "name": "liroo-utils",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "npm run dev -w @liroo/web",
+    "build": "npm run build -w @liroo/wlogs && npm run build -w @liroo/web",
+    "build:all": "npm run build -w @liroo/wlogs && npm run build -w @liroo/wcl-mcp-server && npm run build -w @liroo/web",
+    "build:wlogs": "npm run build -w @liroo/wlogs",
+    "build:mcp": "npm run build -w @liroo/wcl-mcp-server",
+    "build:web": "npm run build -w @liroo/web"
+  }
+}
