@@ -1,0 +1,68 @@
+export const CLASS_COLORS: Record<string, string> = {
+  Warrior: "#C69B6D",
+  Paladin: "#F48CBA",
+  Hunter: "#ABD473",
+  Rogue: "#FFF468",
+  Priest: "#FFFFFF",
+  DeathKnight: "#C41E3A",
+  Shaman: "#0070DD",
+  Mage: "#3FC7EB",
+  Warlock: "#8788EE",
+  Monk: "#00FF98",
+  Druid: "#FF7C0A",
+  DemonHunter: "#A330C9",
+  Evoker: "#33937F",
+};
+
+export const SUPPORTED_SPECS = new Set(["Evoker-Preservation"]);
+
+export const SPEC_ICONS: Record<string, string> = {
+  "Evoker-Preservation": "classicon_evoker_preservation",
+  "Evoker-Devastation": "classicon_evoker_devastation",
+  "Evoker-Augmentation": "classicon_evoker_augmentation",
+  "Paladin-Holy": "classicon_paladin_holy",
+  "Paladin-Protection": "classicon_paladin_protection",
+  "Paladin-Retribution": "classicon_paladin_retribution",
+  "Priest-Holy": "classicon_priest_holy",
+  "Priest-Discipline": "classicon_priest_discipline",
+  "Priest-Shadow": "classicon_priest_shadow",
+  "Shaman-Restoration": "classicon_shaman_restoration",
+  "Shaman-Elemental": "classicon_shaman_elemental",
+  "Shaman-Enhancement": "classicon_shaman_enhancement",
+  "Druid-Restoration": "classicon_druid_restoration",
+  "Druid-Balance": "classicon_druid_balance",
+  "Druid-Feral": "classicon_druid_feral",
+  "Druid-Guardian": "classicon_druid_guardian",
+  "Monk-Mistweaver": "classicon_monk_mistweaver",
+  "Monk-Windwalker": "classicon_monk_windwalker",
+  "Monk-Brewmaster": "classicon_monk_brewmaster",
+  "Warrior-Arms": "classicon_warrior_arms",
+  "Warrior-Fury": "classicon_warrior_fury",
+  "Warrior-Protection": "classicon_warrior_protection",
+  "Hunter-BeastMastery": "classicon_hunter_beastmastery",
+  "Hunter-Marksmanship": "classicon_hunter_marksmanship",
+  "Hunter-Survival": "classicon_hunter_survival",
+  "Rogue-Assassination": "classicon_rogue_assassination",
+  "Rogue-Outlaw": "classicon_rogue_outlaw",
+  "Rogue-Subtlety": "classicon_rogue_subtlety",
+  "Mage-Arcane": "classicon_mage_arcane",
+  "Mage-Fire": "classicon_mage_fire",
+  "Mage-Frost": "classicon_mage_frost",
+  "Warlock-Affliction": "classicon_warlock_affliction",
+  "Warlock-Demonology": "classicon_warlock_demonology",
+  "Warlock-Destruction": "classicon_warlock_destruction",
+  "DeathKnight-Blood": "classicon_deathknight_blood",
+  "DeathKnight-Frost": "classicon_deathknight_frost",
+  "DeathKnight-Unholy": "classicon_deathknight_unholy",
+  "DemonHunter-Havoc": "classicon_demonhunter_havoc",
+  "DemonHunter-Vengeance": "classicon_demonhunter_vengeance",
+};
+
+export const DIFFICULTY: Record<number, { label: string; color: string }> = {
+  1: { label: "LFR", color: "#a0a0a0" },
+  3: { label: "Normal", color: "#1eff00" },
+  4: { label: "Heroic", color: "#a335ee" },
+  5: { label: "Mythic", color: "#ff8000" },
+};
+
+export const DIFFICULTY_ORDER = [5, 4, 3, 1];

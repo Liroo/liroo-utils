@@ -1,6 +1,0 @@
-{
-  "buildCommand": "npm run build -w @liroo/wlogs && npm run build -w @liroo/web",
-  "outputDirectory": "packages/web/.next",
-  "installCommand": "npm install",
-  "framework": "nextjs"
-}
