@@ -243,6 +243,53 @@ export const GET_BUFF_EVENTS = `
   }
 `;
 
+export const GET_ENEMY_CAST_EVENTS = `
+  query GetEnemyCastEvents(
+    $code: String!
+    $fightIDs: [Int]!
+    $startTime: Float!
+    $endTime: Float!
+    $limit: Int
+  ) {
+    reportData {
+      report(code: $code) {
+        events(
+          fightIDs: $fightIDs
+          startTime: $startTime
+          endTime: $endTime
+          dataType: Casts
+          hostilityType: Enemies
+          limit: $limit
+        ) {
+          data
+          nextPageTimestamp
+        }
+      }
+    }
+  }
+`;
+
+export const GET_ENEMY_CASTS_TABLE = `
+  query GetEnemyCastsTable(
+    $code: String!
+    $fightIDs: [Int]!
+    $startTime: Float!
+    $endTime: Float!
+  ) {
+    reportData {
+      report(code: $code) {
+        table(
+          fightIDs: $fightIDs
+          startTime: $startTime
+          endTime: $endTime
+          dataType: Casts
+          hostilityType: Enemies
+        )
+      }
+    }
+  }
+`;
+
 export const GET_DAMAGE_TAKEN_TABLE = `
   query GetDamageTakenTable(
     $code: String!
@@ -257,7 +304,6 @@ export const GET_DAMAGE_TAKEN_TABLE = `
           startTime: $startTime
           endTime: $endTime
           dataType: DamageTaken
-          hostilityType: Enemies
         )
       }
     }

@@ -7,7 +7,6 @@ import { Search, Loader2 } from "lucide-react";
 import { FightSelector } from "./fight-selector";
 import { PlayerSelector } from "./player-selector";
 import { CastTimeline } from "./cast-timeline";
-import { DamageProfile } from "./damage-profile";
 import { useReport } from "../hooks/use-report";
 import { useCastTimeline } from "../hooks/use-cast-timeline";
 import { useDamageProfile } from "../hooks/use-damage-profile";
@@ -187,17 +186,11 @@ export function ReportAnalysis({
                   (a: { id: number; name: string }) => a.id === sourceId
                 )?.name
               }
+              damageProfile={damageProfile ?? undefined}
+              encounterID={selectedFight?.encounterID}
             />
           )}
 
-          {/* Damage Profile */}
-          {damageProfileLoading && (
-            <div className="flex items-center gap-2 text-[var(--muted)] text-sm">
-              <Loader2 size={16} className="animate-spin" /> Loading damage
-              profile...
-            </div>
-          )}
-          {damageProfile && <DamageProfile data={damageProfile} />}
         </div>
       )}
     </div>

@@ -6,6 +6,8 @@ import {
   GET_CAST_EVENTS,
   GET_CASTS_TABLE,
   GET_DAMAGE_TAKEN_TABLE,
+  GET_ENEMY_CAST_EVENTS,
+  GET_ENEMY_CASTS_TABLE,
   GET_ENCOUNTER_RANKINGS,
   GET_CHARACTER_RANKINGS,
   GET_RATE_LIMIT,
@@ -332,9 +334,11 @@ export class WCLClient {
       for (const raw of events) {
         if ((raw.type as string) !== "combatantinfo") continue;
         const gear = (raw.gear as Array<{ id: number; itemLevel: number; quality: number }>) ?? [];
-        const validGear = gear.filter((g) => g.id > 0 && g.itemLevel > 0);
+        // Exclude shirt (slot 3) and tabard (slot 17) — WoW ilvl uses 16 slots
+        const validGear = gear.filter((g, i) => g.id > 0 && g.itemLevel > 0 && i !== 3 && i !== 17);
+        const ILVL_SLOT_COUNT = 16;
         const ilvl = validGear.length > 0
-          ? Math.round(validGear.reduce((s, g) => s + g.itemLevel, 0) / validGear.length)
+          ? Math.round(validGear.reduce((s, g) => s + g.itemLevel, 0) / ILVL_SLOT_COUNT)
           : 0;
 
         // Tier set detection: count items with setID (WCL includes it when available)
@@ -613,9 +617,15 @@ export class WCLClient {
     const { code, fightID, startTime, endTime } = params;
     const fightDuration = endTime - startTime;
 
-    // Fetch DamageTaken table (ability names/icons) and report (NPC actors) in parallel
-    const [tableData, reportData] = await Promise.all([
+    // Fetch DamageTaken table, enemy casts table, and report in parallel
+    const [tableData, enemyCastsTableData, reportData] = await Promise.all([
       this.query<GetFightTableResponse>(GET_DAMAGE_TAKEN_TABLE, {
+        code,
+        fightIDs: [fightID],
+        startTime,
+        endTime,
+      }),
+      this.query<GetFightTableResponse>(GET_ENEMY_CASTS_TABLE, {
         code,
         fightIDs: [fightID],
         startTime,
@@ -624,14 +634,46 @@ export class WCLClient {
       this.getReport(code),
     ]);
 
-    // Build ability lookup from table
+    // Build ability lookup from DamageTaken table (entries = players, abilities = boss spells that hit them)
     const table = tableData.reportData.report.table as {
-      data?: { entries?: Array<{ guid: number; name: string; abilityIcon: string; total: number }> };
+      data?: {
+        entries?: Array<{
+          abilities?: Array<{ guid: number; name: string; icon: string; type: number }>;
+        }>;
+      };
     };
     const abilityInfo: Record<number, { name: string; icon: string }> = {};
     if (table?.data?.entries) {
       for (const entry of table.data.entries) {
-        abilityInfo[entry.guid] = { name: entry.name, icon: entry.abilityIcon };
+        if (entry.abilities) {
+          for (const ability of entry.abilities) {
+            if (!abilityInfo[ability.guid]) {
+              abilityInfo[ability.guid] = { name: ability.name, icon: ability.icon };
+            }
+          }
+        }
+      }
+    }
+
+    // Also build ability lookup from enemy casts table (entries = NPCs, abilities = what they cast)
+    const enemyCastsTable = enemyCastsTableData.reportData.report.table as {
+      data?: {
+        entries?: Array<{
+          id: number;
+          name: string;
+          abilities?: Array<{ guid: number; name: string; icon: string; type: number }>;
+        }>;
+      };
+    };
+    if (enemyCastsTable?.data?.entries) {
+      for (const entry of enemyCastsTable.data.entries) {
+        if (entry.abilities) {
+          for (const ability of entry.abilities) {
+            if (!abilityInfo[ability.guid]) {
+              abilityInfo[ability.guid] = { name: ability.name, icon: ability.icon };
+            }
+          }
+        }
       }
     }
 
@@ -683,6 +725,34 @@ export class WCLClient {
       currentStart = page.nextPageTimestamp;
     }
 
+    // Fetch enemy cast events (paginated) — for abilities that don't deal damage (debuffs, mechanics)
+    const enemyCastEvents: Array<{
+      timestamp: number;
+      sourceID: number;
+      abilityGameID: number;
+    }> = [];
+
+    let castStart = startTime;
+    while (true) {
+      const data = await this.query<GetFightEventsResponse>(GET_ENEMY_CAST_EVENTS, {
+        code,
+        fightIDs: [fightID],
+        startTime: castStart,
+        endTime,
+        limit: 10000,
+      });
+      const page = data.reportData.report.events;
+      for (const raw of page.data as Record<string, unknown>[]) {
+        enemyCastEvents.push({
+          timestamp: (raw.timestamp as number) - startTime,
+          sourceID: raw.sourceID as number,
+          abilityGameID: raw.abilityGameID as number,
+        });
+      }
+      if (!page.nextPageTimestamp) break;
+      castStart = page.nextPageTimestamp;
+    }
+
     // Group events by sourceID → abilityGameID
     const sourceMap = new Map<number, Map<number, { hits: EnemyAbilityHit[]; total: number }>>();
 
@@ -709,6 +779,29 @@ export class WCLClient {
           timestamp: ev.timestamp,
           totalDamage: ev.amount,
           targetsHit: 1,
+        });
+      }
+    }
+
+    // Merge enemy cast events (adds abilities that don't deal damage)
+    for (const ev of enemyCastEvents) {
+      let abilityMap = sourceMap.get(ev.sourceID);
+      if (!abilityMap) {
+        abilityMap = new Map();
+        sourceMap.set(ev.sourceID, abilityMap);
+      }
+      let abilityData = abilityMap.get(ev.abilityGameID);
+      if (!abilityData) {
+        abilityData = { hits: [], total: 0 };
+        abilityMap.set(ev.abilityGameID, abilityData);
+      }
+      // Only add if no damage hit exists near this timestamp (avoid duplicates)
+      const lastHit = abilityData.hits[abilityData.hits.length - 1];
+      if (!lastHit || ev.timestamp - lastHit.timestamp >= 200) {
+        abilityData.hits.push({
+          timestamp: ev.timestamp,
+          totalDamage: 0,
+          targetsHit: 0,
         });
       }
     }

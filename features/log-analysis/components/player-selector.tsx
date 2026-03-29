@@ -157,7 +157,7 @@ export function PlayerSelector({ actors, playerDetails, selectedSourceId, onSele
           {/* Supported section */}
           {supported.length > 0 && (
             <div>
-              <div className="sticky top-0 px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border)] text-xs font-semibold text-[var(--muted)] uppercase tracking-wide">
+              <div className="sticky top-0 z-10 px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border)] text-xs font-semibold text-[var(--muted)] uppercase tracking-wide">
                 Supported
               </div>
               <div className="border-l-2 border-green-500/50">
@@ -169,7 +169,7 @@ export function PlayerSelector({ actors, playerDetails, selectedSourceId, onSele
           {/* Other section */}
           {others.length > 0 && (
             <div>
-              <div className="sticky top-0 px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border)] text-xs font-semibold text-[var(--muted)] uppercase tracking-wide flex items-center gap-2">
+              <div className="sticky top-0 z-10 px-3 py-1.5 bg-[var(--background)] border-b border-[var(--border)] text-xs font-semibold text-[var(--muted)] uppercase tracking-wide flex items-center gap-2">
                 Other
                 <span className="text-[10px] font-normal normal-case tracking-normal opacity-60">
                   (analysis not available)

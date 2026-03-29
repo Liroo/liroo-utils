@@ -12,6 +12,8 @@ import type {
   DTPSPoint,
   EchoCountPoint,
   CombatantInfo,
+  DamageProfileResult,
+  EnemyAbility,
 } from "@/lib/wlogs/types/wcl-responses";
 import { RaidFrames } from "./raid-frames";
 
@@ -62,6 +64,8 @@ interface CastTimelineProps {
   fightId?: number;
   sourceId?: number;
   playerName?: string;
+  damageProfile?: DamageProfileResult;
+  encounterID?: number;
 }
 
 // --- Constants ---
@@ -83,6 +87,8 @@ const BUFF_COLORS: Record<number, { bg: string; text: string }> = {
   369299: { bg: "#d29922", text: "#fff" }, // Essence Burst — amber
   1242759: { bg: "#bc8cff", text: "#fff" }, // Twin Echoes — purple
 };
+const BOSS_ROW_HEIGHT = 28;
+const BOSS_ICON_SIZE = 22;
 const ZOOM_SPEED = 0.003;
 
 const SPELL_COLORS: Record<string, string> = {
@@ -110,6 +116,37 @@ function iconUrl(abilityIcon: string): string {
 function fmtTime(ms: number): string {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// Reversion marker color: green → yellow → orange → red → dark red based on intensity 0..1
+const REV_COLORS = ["#3fb950", "#b8cc20", "#e8a016", "#e05030", "#8b0000"] as const;
+const REV_STROKES = ["#2ea043", "#9ab015", "#c08010", "#c03020", "#600000"] as const;
+
+function revColor(t: number): string {
+  const i = Math.min(Math.floor(t * (REV_COLORS.length - 1)), REV_COLORS.length - 2);
+  const f = t * (REV_COLORS.length - 1) - i;
+  return lerpColor(REV_COLORS[i], REV_COLORS[i + 1], f);
+}
+
+function revStroke(t: number): string {
+  const i = Math.min(Math.floor(t * (REV_STROKES.length - 1)), REV_STROKES.length - 2);
+  const f = t * (REV_STROKES.length - 1) - i;
+  return lerpColor(REV_STROKES[i], REV_STROKES[i + 1], f);
+}
+
+function lerpColor(a: string, b: string, t: number): string {
+  const pa = [parseInt(a.slice(1, 3), 16), parseInt(a.slice(3, 5), 16), parseInt(a.slice(5, 7), 16)];
+  const pb = [parseInt(b.slice(1, 3), 16), parseInt(b.slice(3, 5), 16), parseInt(b.slice(5, 7), 16)];
+  const r = Math.round(pa[0] + (pb[0] - pa[0]) * t);
+  const g = Math.round(pa[1] + (pb[1] - pa[1]) * t);
+  const bl = Math.round(pa[2] + (pb[2] - pa[2]) * t);
+  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${bl.toString(16).padStart(2, "0")}`;
+}
+
+function fmtDmg(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(Math.round(n));
 }
 
 function fmtSec(s: number): string {
@@ -213,6 +250,148 @@ function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[]): CastWa
   return warnings;
 }
 
+// --- Boss ability filtering ---
+
+// Boss spell whitelist per encounterID (Voidspire raid)
+// Uses spell IDs (from DamageTaken + Enemy Casts) + fallback name matching for unresolved spells
+const BOSS_SPELL_IDS: Record<number, Set<number>> = {
+  // Imperator Averzian
+  3176: new Set([
+    1249251, 1259903, // Dark Upheaval
+    1253691, // Shadow's Advance
+    1249262, 1249265, 1249266, 1260206, // Umbral Collapse
+    1261249, 1262036, 1279890, // Void Rupture
+    1258883, // Void Fall
+    1260712, 1260718, // Oblivion's Wrath
+  ]),
+  // Vorasius
+  3177: new Set([
+    1241808, // Shadowclaw Slam
+    1275558, // Parasite Expulsion
+    1259186, // Blisterburst
+    1257607, // Void Breath
+  ]),
+  // Vaelgor & Ezzorak
+  3178: new Set([
+    1265131, 1265143, 1280434, // Vaelwing
+    1264467, // Tail Lash
+    1245645, 1245647, // Rakfang
+    1265152, // Impale
+    1262623, 1262651, // Nullbeam
+    1270497, // Shadowmark
+    1258744, 1259275, // Midnight Manifestation
+    1244221, // Dread Breath
+    1245391, 1245500, // Gloom
+    1244917, 1245302, // Void Howl
+    1249748, 1250071, // Midnight Flames
+  ]),
+  // Fallen-King Salhadaar
+  3179: new Set([
+    1233865, // Null Corona
+    1232467, // Grasp of Emptiness
+    1243743, // Interrupting Tremor
+    1233787, // Dark Hand
+    1233819, 1233826, // Void Expulsion
+    1246461, // Rift Slash
+    1237035, 1237040, // Voidstalker Sting
+    1237614, // Ranger Captain's Mark
+    1246918, 1246925, // Cosmic Barrier
+  ]),
+  // Lightblinded Vanguard
+  3180: new Set([
+    1258662, // Light Infused
+    1246497, 1246502, // Avenger's Shield
+    1246736, 1251857, // Judgment
+    1251859, // Shield of the Righteous
+    1251812, // Final Verdict
+    1249130, // Elekk Charge
+    1246765, // Divine Storm
+    1248652, // Divine Toll
+    1246165, // Aura of Devotion
+    1248450, // Aura of Wrath
+    1248452, // Aura of Peace
+    1255739, // Searing Radiance
+    1246749, // Sacred Toll
+    1249024, // Execution Sentence
+  ]),
+  // Crown of the Cosmos
+  3181: new Set([
+    1250686, // Twisting Obscurity
+    1254081, // Fractured Projection
+    1285211, 1285504, // Dark Radiation
+    1260835, // Despotic Command
+    1250803, 1262989, // Shattering Twilight
+    1254018, // Entropic Unraveling
+  ]),
+  // Chimaerus, the Undreamt God
+  3306: new Set([
+    1258610, // Rift Emergence
+    1250953, // Rift Sickness
+    1262289, 1262305, // Alndust Upheaval
+    1246621, 1246653, // Caustic Phlegm
+    1257087, // Consuming Miasma
+    1262020, 1262053, 1262059, // Colossal Strikes
+    1272689, // Rending Tear
+    1273112, // Consume
+  ]),
+};
+
+// Fallback: spell names for abilities not found by ID (debuffs/auras not in casts/damage data)
+const BOSS_SPELL_NAMES: Record<number, Set<string>> = {
+  3176: new Set(["Void Marked", "Cosmic Eruption"]),
+  3177: new Set(["Primordial Roar", "Smashing Frenzy", "Shadowclaw Slam"]),
+  3178: new Set(["Nullzone"]),
+  3179: new Set(["Silverstrike Arrow", "Silversunder Catastrophe", "Call of the Void", "Aspect of the End", "Devouring Cosmos"]),
+  3180: new Set(["Blinding Light", "Tyr's Wrath"]),
+  3181: new Set(["Void Convergence"]),
+  3306: new Set(["Alnsight", "Rift Madness", "Corrupted Devastation"]),
+};
+
+function filterBossAbilities(
+  profile: DamageProfileResult | undefined,
+  encounterID?: number,
+): EnemyAbility[] {
+  if (!profile || !encounterID) return [];
+
+  const idWhitelist = BOSS_SPELL_IDS[encounterID];
+  const nameWhitelist = BOSS_SPELL_NAMES[encounterID];
+  if (!idWhitelist && !nameWhitelist) return [];
+
+  // Collect abilities from all enemies (boss + adds), deduplicate by name
+  const seen = new Set<string>();
+  const allAbilities: EnemyAbility[] = [];
+  for (const enemy of profile.enemies) {
+    for (const ability of enemy.abilities) {
+      if (!seen.has(ability.name)) {
+        seen.add(ability.name);
+        allAbilities.push(ability);
+      }
+    }
+  }
+
+  return allAbilities
+    .filter((a) =>
+      !a.name.startsWith("Unknown(") &&
+      (idWhitelist?.has(a.abilityGameID) || nameWhitelist?.has(a.name))
+    )
+    .sort((a, b) => (a.hits[0]?.timestamp ?? Infinity) - (b.hits[0]?.timestamp ?? Infinity));
+}
+
+// --- Boss timer colors ---
+
+const BOSS_SPELL_COLORS = [
+  "#9b59b6", // purple
+  "#e74c3c", // red
+  "#3498db", // blue
+  "#e67e22", // orange
+  "#1abc9c", // teal
+  "#f1c40f", // yellow
+  "#e91e63", // pink
+  "#2ecc71", // green
+  "#00bcd4", // cyan
+  "#ff5722", // deep orange
+];
+
 // --- Essence ---
 
 interface EP { time: number; essence: number }
@@ -278,7 +457,7 @@ function areaPath(pts: EP[], toX: (t: number) => number, w: number): string {
 
 // --- Component ---
 
-export function CastTimeline({ data, actors, reportCode, fightId, sourceId, playerName }: CastTimelineProps) {
+export function CastTimeline({ data, actors, reportCode, fightId, sourceId, playerName, damageProfile, encounterID }: CastTimelineProps) {
   const viewRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
 
@@ -287,9 +466,11 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   const [viewStartS, setViewStartS] = useState(0);
   const [mouseClientX, setMouseClientX] = useState<number | null>(null);
   const [hoveredCast, setHoveredCast] = useState<CastTimelineEvent | null>(null);
+  const [hoveredRevPeak, setHoveredRevPeak] = useState<{ timestamp: number; dtps: number; total5s: number; isPrimary: boolean } | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [leftChart, setLeftChart] = useState<ChartType>("essence");
   const [rightChart, setRightChart] = useState<ChartType>("hps");
+  const [bossTimersOpen, setBossTimersOpen] = useState(false);
   const [hiddenSpells, setHiddenSpells] = useState<Set<number>>(() => {
     try {
       const stored = localStorage.getItem("hidden-spells");
@@ -420,6 +601,83 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   const hpsMax = hpsData.length > 0 ? Math.max(...hpsData.map((p) => p.hps), 1) : 1;
   const dtpsData = data.dtpsGraph ?? [];
   const dtpsMax = dtpsData.length > 0 ? Math.max(...dtpsData.map((p) => p.dtps), 1) : 1;
+
+  // Optimal Reversion/Merithra's Blessing moments
+  // Find local DTPS peaks + ensure at least one marker every 20s (best moment in each window)
+  type RevPeak = { timestamp: number; dtps: number; total5s: number; isPrimary: boolean };
+  const reversionPeaks = (() => {
+    if (dtpsData.length < 3) return [] as RevPeak[];
+    const threshold = dtpsMax * 0.4;
+
+    // Step 1: find real local maxima above threshold
+    const rawPeaks: RevPeak[] = [];
+    for (let i = 1; i < dtpsData.length - 1; i++) {
+      const cur = dtpsData[i].dtps;
+      if (cur > dtpsData[i - 1].dtps && cur >= dtpsData[i + 1].dtps && cur >= threshold) {
+        rawPeaks.push({ timestamp: dtpsData[i].timestamp, dtps: cur, total5s: cur * 5, isPrimary: true });
+      }
+    }
+    // Deduplicate: keep only peaks at least 5s apart
+    const peaks: RevPeak[] = [];
+    for (const p of rawPeaks) {
+      if (peaks.length === 0 || p.timestamp - peaks[peaks.length - 1].timestamp >= 5000) {
+        peaks.push(p);
+      } else if (p.dtps > peaks[peaks.length - 1].dtps) {
+        peaks[peaks.length - 1] = p;
+      }
+    }
+
+    // Step 2: fill gaps — ensure at least one marker every 20s
+    const MAX_GAP = 30_000;
+    const filled: RevPeak[] = [];
+    let lastTs = 0;
+
+    for (const peak of peaks) {
+      // Fill any gap before this peak
+      while (peak.timestamp - lastTs > MAX_GAP) {
+        const windowStart = lastTs;
+        const windowEnd = Math.min(lastTs + MAX_GAP, peak.timestamp - 5000);
+        // Find best DTPS point in this gap
+        let best: RevPeak | null = null;
+        for (const d of dtpsData) {
+          if (d.timestamp <= windowStart || d.timestamp > windowEnd) continue;
+          if (!best || d.dtps > best.dtps) {
+            best = { timestamp: d.timestamp, dtps: d.dtps, total5s: d.dtps * 5, isPrimary: false };
+          }
+        }
+        if (best) {
+          filled.push(best);
+          lastTs = best.timestamp;
+        } else {
+          lastTs = windowEnd;
+        }
+      }
+      filled.push(peak);
+      lastTs = peak.timestamp;
+    }
+    // Fill after last peak until end of fight
+    const fightEnd = data.fightDuration;
+    while (fightEnd - lastTs > MAX_GAP) {
+      const windowStart = lastTs;
+      const windowEnd = Math.min(lastTs + MAX_GAP, fightEnd);
+      let best: RevPeak | null = null;
+      for (const d of dtpsData) {
+        if (d.timestamp <= windowStart || d.timestamp > windowEnd) continue;
+        if (!best || d.dtps > best.dtps) {
+          best = { timestamp: d.timestamp, dtps: d.dtps, total5s: d.dtps * 5, isPrimary: false };
+        }
+      }
+      if (best) {
+        filled.push(best);
+        lastTs = best.timestamp;
+      } else {
+        break;
+      }
+    }
+
+    return filled;
+  })();
+
   // Build echo count from raidBuffEvents, filtering to actual players only
   const echoCountData = (() => {
     const playerIds = new Set(actors?.filter((a) => a.subType !== "Unknown").map((a) => a.id) ?? []);
@@ -539,9 +797,21 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
     }
     return ids;
   })();
+  // Refresh Wowhead tooltips when boss timers load/toggle
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).$WowheadPower?.refreshLinks?.();
+  }, [damageProfile, bossTimersOpen]);
+
   const buffLanesHeight = buffLanes.length * BUFF_LANE_HEIGHT;
+  const bossAbilities = filterBossAbilities(damageProfile, encounterID);
+  const hasBossTimers = bossAbilities.length > 0;
+  const BOSS_HEADER_HEIGHT = hasBossTimers ? 24 : 0;
+  const bossTimersHeight = hasBossTimers
+    ? BOSS_HEADER_HEIGHT + (bossTimersOpen ? bossAbilities.length * BOSS_ROW_HEIGHT : 0)
+    : 0;
   const warnRowH = hasWarnings ? WARN_ROW_HEIGHT : 0;
-  const totalH = warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + CHART_HEIGHT + RULER_HEIGHT;
+  const totalH = warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + bossTimersHeight + CHART_HEIGHT + RULER_HEIGHT;
 
   // View width in seconds
   const getViewWidthS = () => {
@@ -811,6 +1081,48 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
               />
             </div>
           ))}
+          {/* Boss timer labels */}
+          {hasBossTimers && (
+            <>
+              <div
+                className="flex items-center justify-center cursor-pointer hover:bg-[var(--card-hover)]"
+                style={{ height: BOSS_HEADER_HEIGHT, borderBottom: "1px solid var(--border)" }}
+                onClick={() => setBossTimersOpen((o) => !o)}
+                title="Toggle Boss Timers"
+              >
+                <svg width={10} height={10} viewBox="0 0 10 10" className="text-[var(--muted)]">
+                  {bossTimersOpen
+                    ? <path d="M2 3.5 L5 7 L8 3.5" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                    : <path d="M3.5 2 L7 5 L3.5 8" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" />
+                  }
+                </svg>
+              </div>
+              {bossTimersOpen && bossAbilities.map((ability) => (
+                <a
+                  key={`boss-${ability.abilityGameID}`}
+                  href={`https://www.wowhead.com/spell=${ability.abilityGameID}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-wowhead={`spell=${ability.abilityGameID}`}
+                  className="flex items-center justify-end pr-0.5 hover:bg-[var(--card-hover)]"
+                  style={{ height: BOSS_ROW_HEIGHT, borderBottom: "1px solid var(--border)" }}
+                >
+                  {ability.icon ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={iconUrl(ability.icon)}
+                      alt={ability.name}
+                      width={20}
+                      height={20}
+                      className="rounded-sm"
+                    />
+                  ) : (
+                    <span className="text-[8px] text-[var(--muted)] truncate max-w-[24px]">{ability.name.slice(0, 3)}</span>
+                  )}
+                </a>
+              ))}
+            </>
+          )}
           {/* Left Y labels */}
           <div style={{ height: CHART_HEIGHT, position: "relative" }}>
             {leftChart !== "none" && (() => {
@@ -978,11 +1290,124 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
             );
           })}
 
+          {/* Boss timers: header + collapsible rows */}
+          {hasBossTimers && (
+            <>
+              {/* Collapse header */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight,
+                  left: 0,
+                  right: 0,
+                  height: BOSS_HEADER_HEIGHT,
+                  borderBottom: "1px solid var(--border)",
+                  cursor: "pointer",
+                  zIndex: 5,
+                }}
+                className="flex items-center bg-[var(--card)]"
+                onClick={() => setBossTimersOpen((o) => !o)}
+              >
+                <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide px-2 select-none">
+                  Boss Timers
+                  <span className="ml-1 font-normal normal-case">({bossAbilities.length})</span>
+                </span>
+              </div>
+
+              {/* Rows */}
+              {bossTimersOpen && bossAbilities.map((ability, rowIdx) => {
+                const rowTop = warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + BOSS_HEADER_HEIGHT + rowIdx * BOSS_ROW_HEIGHT;
+                const color = BOSS_SPELL_COLORS[rowIdx % BOSS_SPELL_COLORS.length];
+
+                // Filter visible hits
+                const visibleHits = ability.hits.filter((hit) => {
+                  const tS = hit.timestamp / 1000;
+                  return tS >= viewStartS - 2 && tS <= viewEndS + 2;
+                });
+
+                return (
+                  <div
+                    key={ability.abilityGameID}
+                    style={{
+                      position: "absolute",
+                      top: rowTop,
+                      left: 0,
+                      right: 0,
+                      height: BOSS_ROW_HEIGHT,
+                      borderBottom: "1px solid var(--border)",
+                    }}
+                  >
+                    {/* Alternating background */}
+                    {rowIdx % 2 === 0 && (
+                      <div className="absolute inset-0" style={{ background: "var(--card)", opacity: 0.2 }} />
+                    )}
+
+                    {/* Cast markers with icon + timestamp */}
+                    {visibleHits.map((hit, hitIdx) => {
+                      const x = toX(hit.timestamp / 1000);
+                      const label = fmtTime(hit.timestamp);
+
+                      return (
+                        <a
+                          key={hitIdx}
+                          href={`https://www.wowhead.com/spell=${ability.abilityGameID}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          data-wowhead={`spell=${ability.abilityGameID}`}
+                          className="absolute flex items-center gap-0.5"
+                          style={{
+                            left: x - BOSS_ICON_SIZE / 2,
+                            top: (BOSS_ROW_HEIGHT - BOSS_ICON_SIZE) / 2,
+                          }}
+                        >
+                          {/* Spell icon */}
+                          <div
+                            className="rounded overflow-hidden flex-shrink-0"
+                            style={{
+                              width: BOSS_ICON_SIZE,
+                              height: BOSS_ICON_SIZE,
+                              border: `1.5px solid ${color}60`,
+                            }}
+                          >
+                            {ability.icon ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={iconUrl(ability.icon)}
+                                alt={ability.name}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                                draggable={false}
+                              />
+                            ) : (
+                              <div
+                                className="w-full h-full flex items-center justify-center text-[7px]"
+                                style={{ background: color + "20", color }}
+                              >
+                                {ability.name.slice(0, 2)}
+                              </div>
+                            )}
+                          </div>
+                          {/* Timestamp label */}
+                          <span
+                            className="text-[9px] font-medium whitespace-nowrap select-none"
+                            style={{ color }}
+                          >
+                            {label}
+                          </span>
+                        </a>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </>
+          )}
+
           {/* Chart SVG */}
           <svg
             width={viewWidthPx}
             height={CHART_HEIGHT}
-            style={{ position: "absolute", top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight, left: 0 }}
+            style={{ position: "absolute", top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + bossTimersHeight, left: 0 }}
           >
             {/* Vertical time grid */}
             {ticks.map((t) => {
@@ -1038,6 +1463,41 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
               );
             })()}
 
+            {/* Optimal Reversion markers (shown when DTPS chart is active) */}
+            {(leftChart === "dtps" || rightChart === "dtps") && reversionPeaks
+              .filter((p) => {
+                const tS = p.timestamp / 1000;
+                return tS >= viewStartS - 2 && tS <= viewEndS + 2;
+              })
+              .map((p, i) => {
+                const x = toX(p.timestamp / 1000);
+                const max = getChartMax("dtps");
+                const y = chartValueToY(p.dtps, max);
+                const isHovered = hoveredRevPeak?.timestamp === p.timestamp;
+                // Intensity 0..1 based on dtps relative to max
+                const intensity = Math.min(1, p.dtps / dtpsMax);
+                // Size: 2.5 (low) → 6 (max)
+                const r = 2.5 + intensity * 3.5;
+                // Color: green → yellow → orange → red → dark red
+                const fill = revColor(intensity);
+                const stroke = revStroke(intensity);
+                return (
+                  <g key={`rev-${i}`}
+                    onMouseEnter={() => setHoveredRevPeak(p)}
+                    onMouseLeave={() => setHoveredRevPeak(null)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <line x1={x} x2={x} y1={0} y2={CHART_HEIGHT}
+                      stroke={fill} strokeWidth={1} opacity={isHovered ? 0.5 : 0.15} strokeDasharray="3,3" />
+                    {/* Invisible larger hit area */}
+                    <circle cx={x} cy={y} r={12} fill="transparent" />
+                    <circle cx={x} cy={y} r={isHovered ? r + 2 : r}
+                      fill={fill} fillOpacity={isHovered ? 1 : 0.85}
+                      stroke={isHovered ? "#fff" : stroke} strokeWidth={isHovered ? 2 : 1.5} />
+                  </g>
+                );
+              })}
+
             {/* Essence cost markers (when essence chart is active) */}
             {(leftChart === "essence" || rightChart === "essence") && visibleCasts
               .filter((c) => c.essenceCost && c.essenceCost > 0)
@@ -1051,7 +1511,7 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
           </svg>
 
           {/* Ruler */}
-          <div style={{ position: "absolute", top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + CHART_HEIGHT, left: 0, right: 0, height: RULER_HEIGHT, borderTop: "1px solid var(--border)" }}>
+          <div style={{ position: "absolute", top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + bossTimersHeight + CHART_HEIGHT, left: 0, right: 0, height: RULER_HEIGHT, borderTop: "1px solid var(--border)" }}>
             {ticks.map((t) => {
               const x = toX(t);
               return (
@@ -1069,7 +1529,7 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
           {mouseViewX !== null && mouseTimeS !== null && mouseTimeS >= 0 && mouseTimeS <= durationS && (
             <>
               <div style={{ position: "absolute", left: mouseViewX, top: 0, width: 1, height: totalH, background: "var(--accent)", opacity: 0.5, pointerEvents: "none", zIndex: 30 }} />
-              <div style={{ position: "absolute", left: mouseViewX, top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + CHART_HEIGHT + 1, transform: "translateX(-50%)", pointerEvents: "none", zIndex: 31 }}>
+              <div style={{ position: "absolute", left: mouseViewX, top: warnRowH + ICON_ROW_HEIGHT + buffLanesHeight + bossTimersHeight + CHART_HEIGHT + 1, transform: "translateX(-50%)", pointerEvents: "none", zIndex: 31 }}>
                 <div className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium" style={{ background: "var(--accent)", color: "white", whiteSpace: "nowrap" }}>
                   {fmtSec(mouseTimeS)}
                 </div>
@@ -1085,6 +1545,14 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
             {buffLanes.map((lane) => (
               <div key={lane.abilityGameID} style={{ height: BUFF_LANE_HEIGHT, borderBottom: "1px solid var(--border)" }} />
             ))}
+            {hasBossTimers && (
+              <>
+                <div style={{ height: BOSS_HEADER_HEIGHT, borderBottom: "1px solid var(--border)" }} />
+                {bossTimersOpen && bossAbilities.map((ability) => (
+                  <div key={`rboss-${ability.abilityGameID}`} style={{ height: BOSS_ROW_HEIGHT, borderBottom: "1px solid var(--border)" }} />
+                ))}
+              </>
+            )}
             <div style={{ height: CHART_HEIGHT, position: "relative" }}>
               {(() => {
                 const max = getChartMax(rightChart);
@@ -1110,7 +1578,50 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
 
       {/* === Info card (below chart, updates on hover) === */}
       <div className="bg-[var(--card)] border border-[var(--border)] rounded-lg px-4 py-3">
-        {activeCast ? (
+        {hoveredRevPeak ? (() => {
+          const intensity = Math.min(1, hoveredRevPeak.dtps / dtpsMax);
+          const peakColor = revColor(intensity);
+          const pctMax = Math.round(intensity * 100);
+          const label = pctMax >= 80 ? "High value" : pctMax >= 50 ? "Good value" : "Low damage";
+          return (
+          <div className="flex items-center gap-4">
+            <div className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center" style={{ background: peakColor + "20", border: `2px solid ${peakColor}` }}>
+              <div className="w-5 h-5 rounded-full" style={{ background: peakColor }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm" style={{ color: peakColor }}>
+                  Reversion Window
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-medium" style={{ background: peakColor + "20", color: peakColor }}>
+                  {label}
+                </span>
+              </div>
+              <div className="text-xs text-[var(--muted)] mt-0.5">{fmtTime(hoveredRevPeak.timestamp)}</div>
+            </div>
+            <div className="flex gap-6 flex-shrink-0">
+              <div className="text-center">
+                <div className="text-sm font-semibold" style={{ color: peakColor }}>
+                  {fmtDmg(hoveredRevPeak.total5s)}
+                </div>
+                <div className="text-[10px] text-[var(--muted)]">5s Damage</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-semibold" style={{ color: peakColor }}>
+                  {fmtDmg(hoveredRevPeak.dtps)}/s
+                </div>
+                <div className="text-[10px] text-[var(--muted)]">Raid DTPS</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-semibold" style={{ color: peakColor }}>
+                  {pctMax}%
+                </div>
+                <div className="text-[10px] text-[var(--muted)]">of Max DTPS</div>
+              </div>
+            </div>
+          </div>
+          );
+        })() : activeCast ? (
           <div className="flex flex-col gap-3">
             {/* Top row: icon + details + stats */}
             <div className="flex items-center gap-4">
@@ -1260,12 +1771,6 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
                     <div className="text-[10px] text-[var(--muted)]">Item Level</div>
                   </div>
                 )}
-                <div className="text-center">
-                  <div className="text-sm font-semibold" style={{ color: combatant.tierPieces >= 4 ? "#d29922" : combatant.tierPieces >= 2 ? "#7ee787" : "var(--muted)" }}>
-                    {combatant.tierPieces >= 4 ? "4p" : combatant.tierPieces >= 2 ? "2p" : "No set"}
-                  </div>
-                  <div className="text-[10px] text-[var(--muted)]">Tier Set</div>
-                </div>
               </>
             );
           })()}
