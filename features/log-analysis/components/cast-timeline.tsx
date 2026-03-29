@@ -268,8 +268,8 @@ function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[], dtpsDat
     if ((cast.abilityGameID === REVERSION_ID || cast.abilityGameID === MERITHRAS_BLESSING_ID) && dtpsData.length > 0) {
       const dtpsAtCast = getDtpsAt(ts);
       const futurePeak = getPeakDtpsInWindow(ts + 5000, ts + 10000);
-      // Warn if future peak is significantly higher than damage at cast time (>2x and >50% of max)
-      if (futurePeak.dtps > dtpsAtCast * 2 && futurePeak.dtps > dtpsMax * 0.5) {
+      // Warn if future peak is notably higher than damage at cast time (>1.5x and >40% of max)
+      if (futurePeak.dtps > dtpsAtCast * 1.5 && futurePeak.dtps > dtpsMax * 0.4) {
         const spellName = cast.abilityGameID === REVERSION_ID ? "Reversion" : "Merithra's Blessing";
         warnings.push({
           cast,
@@ -979,9 +979,22 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   });
 
   // When icons would overlap, only keep every Nth to stay under ~150 DOM nodes
+  // But always keep casts that have warnings
   const maxIcons = 150;
   const visibleCasts = allVisible.length > maxIcons
-    ? allVisible.filter((_, i) => i % Math.ceil(allVisible.length / maxIcons) === 0)
+    ? (() => {
+        const step = Math.ceil(allVisible.length / maxIcons);
+        const thinned = new Set(
+          allVisible.filter((_, i) => i % step === 0)
+        );
+        // Always include casts with warnings
+        for (const c of allVisible) {
+          if (warningByCastTs.has(`${c.timestamp}-${c.abilityGameID}`)) {
+            thinned.add(c);
+          }
+        }
+        return [...thinned].sort((a, b) => a.timestamp - b.timestamp);
+      })()
     : allVisible;
 
   // Find the nearest cast to the mouse cursor (for highlight)
