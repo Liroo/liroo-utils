@@ -334,12 +334,8 @@ export class WCLClient {
       for (const raw of events) {
         if ((raw.type as string) !== "combatantinfo") continue;
         const gear = (raw.gear as Array<{ id: number; itemLevel: number; quality: number }>) ?? [];
-        // Exclude shirt (slot 3) and tabard (slot 17) — WoW ilvl uses 16 slots
-        const validGear = gear.filter((g, i) => g.id > 0 && g.itemLevel > 0 && i !== 3 && i !== 17);
-        const ILVL_SLOT_COUNT = 16;
-        const ilvl = validGear.length > 0
-          ? Math.round(validGear.reduce((s, g) => s + g.itemLevel, 0) / ILVL_SLOT_COUNT)
-          : 0;
+        const validGear = gear.filter((g) => g.id > 0 && g.itemLevel > 0);
+        const ilvl = (raw.ilvl as number) ?? 0;
 
         // Tier set detection: count items with setID (WCL includes it when available)
         const setItems = gear.filter((g: Record<string, unknown>) => (g as Record<string, unknown>).setID != null && (g as Record<string, unknown>).setID !== 0);
