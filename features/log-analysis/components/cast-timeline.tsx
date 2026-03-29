@@ -171,11 +171,25 @@ const STAT_SPELLS = [
   { id: REVERSION_ID, name: "Reversion", color: "#7ee787" },
 ];
 
+const MERITHRAS_BLESSING_ID = 1242728;
+
 interface CastWarning {
   cast: CastTimelineEvent;
-  level: "error" | "warning";
+  level: "error" | "warning" | "info";
   title: string;
   description: string;
+}
+
+function warnColor(level: CastWarning["level"]): string {
+  if (level === "error") return "#f85149";
+  if (level === "info") return "#58a6ff";
+  return "#d29922";
+}
+
+function warnBg(level: CastWarning["level"]): string {
+  if (level === "error") return "#f8514920";
+  if (level === "info") return "#58a6ff20";
+  return "#d2992220";
 }
 
 // Look up buff stacks slightly BEFORE the cast timestamp.
@@ -191,8 +205,33 @@ function getBuffStacks(buffLanes: BuffLane[], buffId: number, timestamp: number)
   return span?.stacks ?? 0;
 }
 
-function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[]): CastWarning[] {
+function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[], dtpsData: DTPSPoint[]): CastWarning[] {
   const warnings: CastWarning[] = [];
+
+  // Pre-compute: find DTPS at a given timestamp (nearest point)
+  const getDtpsAt = (ms: number): number => {
+    let best = 0;
+    let bestDist = Infinity;
+    for (const d of dtpsData) {
+      const dist = Math.abs(d.timestamp - ms);
+      if (dist < bestDist) { bestDist = dist; best = d.dtps; }
+      if (d.timestamp > ms + 1000) break;
+    }
+    return best;
+  };
+
+  // Find peak DTPS in a time window
+  const getPeakDtpsInWindow = (startMs: number, endMs: number): { dtps: number; timestamp: number } => {
+    let best = { dtps: 0, timestamp: startMs };
+    for (const d of dtpsData) {
+      if (d.timestamp < startMs) continue;
+      if (d.timestamp > endMs) break;
+      if (d.dtps > best.dtps) best = { dtps: d.dtps, timestamp: d.timestamp };
+    }
+    return best;
+  };
+
+  const dtpsMax = dtpsData.length > 0 ? Math.max(...dtpsData.map((d) => d.dtps), 1) : 1;
 
   for (const cast of casts) {
     const ts = cast.timestamp;
@@ -222,6 +261,23 @@ function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[]): CastWa
         title: "Echo with Essence Burst (only 1 Twin Echoes)",
         description: "You have Essence Burst active but only 1 Twin Echoes stack. Consider using Emerald Blossom (free with Essence Burst) to get more value before spending Echo here.",
       });
+    }
+
+    // Reversion/Merithra's Blessing mistimed: big damage spike comes 5-10s AFTER the cast
+    // meaning the player cast too early and won't benefit from the 5s lookback window
+    if ((cast.abilityGameID === REVERSION_ID || cast.abilityGameID === MERITHRAS_BLESSING_ID) && dtpsData.length > 0) {
+      const dtpsAtCast = getDtpsAt(ts);
+      const futurePeak = getPeakDtpsInWindow(ts + 5000, ts + 10000);
+      // Warn if future peak is significantly higher than damage at cast time (>2x and >50% of max)
+      if (futurePeak.dtps > dtpsAtCast * 2 && futurePeak.dtps > dtpsMax * 0.5) {
+        const spellName = cast.abilityGameID === REVERSION_ID ? "Reversion" : "Merithra's Blessing";
+        warnings.push({
+          cast,
+          level: "info",
+          title: `${spellName} cast too early`,
+          description: `Damage spike at ${fmtTime(futurePeak.timestamp)} (${fmtDmg(futurePeak.dtps * 5)} over 5s) hits ${((futurePeak.timestamp - ts) / 1000).toFixed(0)}s after this cast. Delaying would capture more damage in the 5s healing window.`,
+        });
+      }
     }
 
     // Essence Burst wasted: buff refreshed at max stacks means a proc was lost
@@ -589,9 +645,6 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
     : allCasts;
 
   const buffLanes = data.buffLanes ?? [];
-  const castWarnings = analyzeCasts(casts, buffLanes);
-  const warningByCastTs = new Map(castWarnings.map((w) => [`${w.cast.timestamp}-${w.cast.abilityGameID}`, w]));
-  const hasWarnings = castWarnings.length > 0;
 
   const durationS = data.fightDuration / 1000;
   const essencePts = buildEssence(casts, data.fightDuration);
@@ -601,6 +654,10 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   const hpsMax = hpsData.length > 0 ? Math.max(...hpsData.map((p) => p.hps), 1) : 1;
   const dtpsData = data.dtpsGraph ?? [];
   const dtpsMax = dtpsData.length > 0 ? Math.max(...dtpsData.map((p) => p.dtps), 1) : 1;
+
+  const castWarnings = analyzeCasts(casts, buffLanes, dtpsData);
+  const warningByCastTs = new Map(castWarnings.map((w) => [`${w.cast.timestamp}-${w.cast.abilityGameID}`, w]));
+  const hasWarnings = castWarnings.length > 0;
 
   // Optimal Reversion/Merithra's Blessing moments
   // Find local DTPS peaks + ensure at least one marker every 20s (best moment in each window)
@@ -1161,7 +1218,6 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
                 const w = warningByCastTs.get(`${cast.timestamp}-${cast.abilityGameID}`);
                 if (!w) return null;
                 const x = toX(cast.timestamp / 1000);
-                const isError = w.level === "error";
                 return (
                   <div
                     key={`w-${cast.timestamp}-${i}`}
@@ -1174,9 +1230,9 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
                     <div
                       className="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold cursor-default"
                       style={{
-                        background: isError ? "#f8514920" : "#d2992220",
-                        border: `1.5px solid ${isError ? "#f85149" : "#d29922"}`,
-                        color: isError ? "#f85149" : "#d29922",
+                        background: warnBg(w.level),
+                        border: `1.5px solid ${warnColor(w.level)}`,
+                        color: warnColor(w.level),
                       }}
                     >
                       !
@@ -1689,26 +1745,23 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
             {(() => {
               const w = warningByCastTs.get(`${activeCast.timestamp}-${activeCast.abilityGameID}`);
               if (!w) return null;
-              const isError = w.level === "error";
+              const color = warnColor(w.level);
               return (
                 <div
                   className="flex items-start gap-2 px-3 py-2 rounded-md text-xs"
                   style={{
-                    background: isError ? "#f8514910" : "#d2992210",
-                    border: `1px solid ${isError ? "#f8514930" : "#d2992230"}`,
+                    background: `${color}10`,
+                    border: `1px solid ${color}30`,
                   }}
                 >
                   <span
                     className="flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5"
-                    style={{
-                      border: `1.5px solid ${isError ? "#f85149" : "#d29922"}`,
-                      color: isError ? "#f85149" : "#d29922",
-                    }}
+                    style={{ border: `1.5px solid ${color}`, color }}
                   >
-                    !
+                    {w.level === "info" ? "i" : "!"}
                   </span>
                   <div>
-                    <div className="font-semibold" style={{ color: isError ? "#f85149" : "#d29922" }}>
+                    <div className="font-semibold" style={{ color }}>
                       {w.title}
                     </div>
                     <div className="text-[var(--muted)] mt-0.5 leading-relaxed">
@@ -1843,8 +1896,7 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
             {warningTypes.map((w) => {
               const count = castWarnings.filter((cw) => cw.title === w.title).length;
               const visible = !hiddenWarningTypes.has(w.title);
-              const isError = w.level === "error";
-              const color = isError ? "#f85149" : "#d29922";
+              const color = warnColor(w.level);
               return (
                 <button
                   key={w.title}
@@ -1866,31 +1918,28 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
           {/* Warning items */}
           <div className="flex flex-col gap-2">
             {filteredWarnings.map((w, i) => {
-              const isError = w.level === "error";
+              const color = warnColor(w.level);
               return (
                 <div
                   key={i}
                   className="flex items-start gap-2.5 px-3 py-2 rounded-md text-xs"
                   style={{
-                    background: isError ? "#f8514908" : "#d2992208",
-                    border: `1px solid ${isError ? "#f8514920" : "#d2992220"}`,
+                    background: `${color}08`,
+                    border: `1px solid ${color}20`,
                   }}
                 >
                   <span
                     className="flex-shrink-0 w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold mt-0.5"
-                    style={{
-                      border: `1.5px solid ${isError ? "#f85149" : "#d29922"}`,
-                      color: isError ? "#f85149" : "#d29922",
-                    }}
+                    style={{ border: `1.5px solid ${color}`, color }}
                   >
-                    !
+                    {w.level === "info" ? "i" : "!"}
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[10px] text-[var(--muted)]">
                         {fmtTime(w.cast.timestamp)}
                       </span>
-                      <span className="font-semibold" style={{ color: isError ? "#f85149" : "#d29922" }}>
+                      <span className="font-semibold" style={{ color }}>
                         {w.title}
                       </span>
                     </div>
