@@ -290,6 +290,27 @@ export const GET_ENEMY_CASTS_TABLE = `
   }
 `;
 
+export const GET_DAMAGE_DONE_BY_ENEMIES_TABLE = `
+  query GetDamageDoneByEnemiesTable(
+    $code: String!
+    $fightIDs: [Int]!
+    $startTime: Float!
+    $endTime: Float!
+  ) {
+    reportData {
+      report(code: $code) {
+        table(
+          fightIDs: $fightIDs
+          startTime: $startTime
+          endTime: $endTime
+          dataType: DamageDone
+          hostilityType: Enemies
+        )
+      }
+    }
+  }
+`;
+
 export const GET_DAMAGE_TAKEN_TABLE = `
   query GetDamageTakenTable(
     $code: String!

@@ -6,6 +6,7 @@ import {
   GET_CAST_EVENTS,
   GET_CASTS_TABLE,
   GET_DAMAGE_TAKEN_TABLE,
+  GET_DAMAGE_DONE_BY_ENEMIES_TABLE,
   GET_ENEMY_CAST_EVENTS,
   GET_ENEMY_CASTS_TABLE,
   GET_ENCOUNTER_RANKINGS,
@@ -613,8 +614,8 @@ export class WCLClient {
     const { code, fightID, startTime, endTime } = params;
     const fightDuration = endTime - startTime;
 
-    // Fetch DamageTaken table, enemy casts table, and report in parallel
-    const [tableData, enemyCastsTableData, reportData] = await Promise.all([
+    // Fetch tables and report in parallel
+    const [tableData, enemyCastsTableData, enemyDmgTableData, reportData] = await Promise.all([
       this.query<GetFightTableResponse>(GET_DAMAGE_TAKEN_TABLE, {
         code,
         fightIDs: [fightID],
@@ -622,6 +623,12 @@ export class WCLClient {
         endTime,
       }),
       this.query<GetFightTableResponse>(GET_ENEMY_CASTS_TABLE, {
+        code,
+        fightIDs: [fightID],
+        startTime,
+        endTime,
+      }),
+      this.query<GetFightTableResponse>(GET_DAMAGE_DONE_BY_ENEMIES_TABLE, {
         code,
         fightIDs: [fightID],
         startTime,
@@ -663,6 +670,26 @@ export class WCLClient {
     };
     if (enemyCastsTable?.data?.entries) {
       for (const entry of enemyCastsTable.data.entries) {
+        if (entry.abilities) {
+          for (const ability of entry.abilities) {
+            if (!abilityInfo[ability.guid]) {
+              abilityInfo[ability.guid] = { name: ability.name, icon: ability.icon };
+            }
+          }
+        }
+      }
+    }
+
+    // Also from enemy DamageDone table (entries = NPCs, abilities = damage they deal)
+    const enemyDmgTable = enemyDmgTableData.reportData.report.table as {
+      data?: {
+        entries?: Array<{
+          abilities?: Array<{ guid: number; name: string; icon: string; type: number }>;
+        }>;
+      };
+    };
+    if (enemyDmgTable?.data?.entries) {
+      for (const entry of enemyDmgTable.data.entries) {
         if (entry.abilities) {
           for (const ability of entry.abilities) {
             if (!abilityInfo[ability.guid]) {
@@ -739,10 +766,13 @@ export class WCLClient {
       });
       const page = data.reportData.report.events;
       for (const raw of page.data as Record<string, unknown>[]) {
+        const sourceID = raw.sourceID as number | undefined;
+        const abilityGameID = raw.abilityGameID as number | undefined;
+        if (sourceID == null || abilityGameID == null) continue;
         enemyCastEvents.push({
           timestamp: (raw.timestamp as number) - startTime,
-          sourceID: raw.sourceID as number,
-          abilityGameID: raw.abilityGameID as number,
+          sourceID,
+          abilityGameID,
         });
       }
       if (!page.nextPageTimestamp) break;

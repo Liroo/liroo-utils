@@ -308,129 +308,24 @@ function analyzeCasts(casts: CastTimelineEvent[], buffLanes: BuffLane[], dtpsDat
 
 // --- Boss ability filtering ---
 
-// Boss spell whitelist per encounterID (Voidspire raid)
-// Uses spell IDs (from DamageTaken + Enemy Casts) + fallback name matching for unresolved spells
-const BOSS_SPELL_IDS: Record<number, Set<number>> = {
-  // Imperator Averzian
-  3176: new Set([
-    1249251, 1259903, // Dark Upheaval
-    1253691, // Shadow's Advance
-    1249262, 1249265, 1249266, 1260206, // Umbral Collapse
-    1261249, 1262036, 1279890, // Void Rupture
-    1258883, // Void Fall
-    1260712, 1260718, // Oblivion's Wrath
-  ]),
-  // Vorasius
-  3177: new Set([
-    1241808, // Shadowclaw Slam
-    1275558, // Parasite Expulsion
-    1259186, // Blisterburst
-    1257607, // Void Breath
-  ]),
-  // Vaelgor & Ezzorak
-  3178: new Set([
-    1265131, 1265143, 1280434, // Vaelwing
-    1264467, // Tail Lash
-    1245645, 1245647, // Rakfang
-    1265152, // Impale
-    1262623, 1262651, // Nullbeam
-    1270497, // Shadowmark
-    1258744, 1259275, // Midnight Manifestation
-    1244221, // Dread Breath
-    1245391, 1245500, // Gloom
-    1244917, 1245302, // Void Howl
-    1249748, 1250071, // Midnight Flames
-  ]),
-  // Fallen-King Salhadaar
-  3179: new Set([
-    1233865, // Null Corona
-    1232467, // Grasp of Emptiness
-    1243743, // Interrupting Tremor
-    1233787, // Dark Hand
-    1233819, 1233826, // Void Expulsion
-    1246461, // Rift Slash
-    1237035, 1237040, // Voidstalker Sting
-    1237614, // Ranger Captain's Mark
-    1246918, 1246925, // Cosmic Barrier
-  ]),
-  // Lightblinded Vanguard
-  3180: new Set([
-    1258662, // Light Infused
-    1246497, 1246502, // Avenger's Shield
-    1246736, 1251857, // Judgment
-    1251859, // Shield of the Righteous
-    1251812, // Final Verdict
-    1249130, // Elekk Charge
-    1246765, // Divine Storm
-    1248652, // Divine Toll
-    1246165, // Aura of Devotion
-    1248450, // Aura of Wrath
-    1248452, // Aura of Peace
-    1255739, // Searing Radiance
-    1246749, // Sacred Toll
-    1249024, // Execution Sentence
-  ]),
-  // Crown of the Cosmos
-  3181: new Set([
-    1250686, // Twisting Obscurity
-    1254081, // Fractured Projection
-    1285211, 1285504, // Dark Radiation
-    1260835, // Despotic Command
-    1250803, 1262989, // Shattering Twilight
-    1254018, // Entropic Unraveling
-  ]),
-  // Chimaerus, the Undreamt God
-  3306: new Set([
-    1258610, // Rift Emergence
-    1250953, // Rift Sickness
-    1262289, 1262305, // Alndust Upheaval
-    1246621, 1246653, // Caustic Phlegm
-    1257087, // Consuming Miasma
-    1262020, 1262053, 1262059, // Colossal Strikes
-    1272689, // Rending Tear
-    1273112, // Consume
-  ]),
-};
+const MIN_BOSS_DAMAGE_PCT = 0.005; // 0.5% of total raid damage
 
-// Fallback: spell names for abilities not found by ID (debuffs/auras not in casts/damage data)
-const BOSS_SPELL_NAMES: Record<number, Set<string>> = {
-  3176: new Set(["Void Marked", "Cosmic Eruption"]),
-  3177: new Set(["Primordial Roar", "Smashing Frenzy", "Shadowclaw Slam"]),
-  3178: new Set(["Nullzone"]),
-  3179: new Set(["Silverstrike Arrow", "Silversunder Catastrophe", "Call of the Void", "Aspect of the End", "Devouring Cosmos"]),
-  3180: new Set(["Blinding Light", "Tyr's Wrath"]),
-  3181: new Set(["Void Convergence"]),
-  3306: new Set(["Alnsight", "Rift Madness", "Corrupted Devastation"]),
-};
-
-function filterBossAbilities(
-  profile: DamageProfileResult | undefined,
-  encounterID?: number,
-): EnemyAbility[] {
-  if (!profile || !encounterID) return [];
-
-  const idWhitelist = BOSS_SPELL_IDS[encounterID];
-  const nameWhitelist = BOSS_SPELL_NAMES[encounterID];
-  if (!idWhitelist && !nameWhitelist) return [];
-
-  // Collect abilities from all enemies (boss + adds), deduplicate by name
+function getAllBossAbilities(profile: DamageProfileResult): EnemyAbility[] {
+  // Collect abilities from all enemies, deduplicate by name, filter junk
   const seen = new Set<string>();
   const allAbilities: EnemyAbility[] = [];
   for (const enemy of profile.enemies) {
     for (const ability of enemy.abilities) {
-      if (!seen.has(ability.name)) {
-        seen.add(ability.name);
-        allAbilities.push(ability);
-      }
+      if (seen.has(ability.name)) continue;
+      seen.add(ability.name);
+      if (ability.name.startsWith("Unknown(")) continue;
+      if (ability.abilityGameID === 1) continue; // Melee
+      if (ability.hitCount <= 1) continue;
+      if (profile.totalRaidDamage > 0 && ability.totalDamage / profile.totalRaidDamage < MIN_BOSS_DAMAGE_PCT) continue;
+      allAbilities.push(ability);
     }
   }
-
-  return allAbilities
-    .filter((a) =>
-      !a.name.startsWith("Unknown(") &&
-      (idWhitelist?.has(a.abilityGameID) || nameWhitelist?.has(a.name))
-    )
-    .sort((a, b) => (a.hits[0]?.timestamp ?? Infinity) - (b.hits[0]?.timestamp ?? Infinity));
+  return allAbilities.sort((a, b) => b.totalDamage - a.totalDamage);
 }
 
 // --- Boss timer colors ---
@@ -524,9 +419,45 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   const [hoveredCast, setHoveredCast] = useState<CastTimelineEvent | null>(null);
   const [hoveredRevPeak, setHoveredRevPeak] = useState<{ timestamp: number; dtps: number; total5s: number; isPrimary: boolean } | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
-  const [leftChart, setLeftChart] = useState<ChartType>("essence");
-  const [rightChart, setRightChart] = useState<ChartType>("hps");
+  const [leftChart, setLeftChart] = useState<ChartType>("dtps");
+  const [rightChart, setRightChart] = useState<ChartType>("essence");
   const [bossTimersOpen, setBossTimersOpen] = useState(false);
+  const [hiddenBossSpells, setHiddenBossSpells] = useState<Set<string>>(() => {
+    if (!encounterID) return new Set();
+    try {
+      const stored = localStorage.getItem(`hidden-boss-spells-${encounterID}`);
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set();
+    } catch { return new Set(); }
+  });
+  const [bossFilterOpen, setBossFilterOpen] = useState(false);
+  const bossFilterRef = useRef<HTMLDivElement>(null);
+
+  // Persist hidden boss spells per encounter
+  useEffect(() => {
+    if (!encounterID) return;
+    localStorage.setItem(`hidden-boss-spells-${encounterID}`, JSON.stringify([...hiddenBossSpells]));
+  }, [hiddenBossSpells, encounterID]);
+
+  // Reload hidden boss spells when encounter changes
+  useEffect(() => {
+    if (!encounterID) return;
+    try {
+      const stored = localStorage.getItem(`hidden-boss-spells-${encounterID}`);
+      setHiddenBossSpells(stored ? new Set(JSON.parse(stored) as string[]) : new Set());
+    } catch { setHiddenBossSpells(new Set()); }
+  }, [encounterID]);
+
+  // Close boss filter dropdown on outside click
+  useEffect(() => {
+    if (!bossFilterOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (bossFilterRef.current && !bossFilterRef.current.contains(e.target as Node)) {
+        setBossFilterOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [bossFilterOpen]);
   const [hiddenSpells, setHiddenSpells] = useState<Set<number>>(() => {
     try {
       const stored = localStorage.getItem("hidden-spells");
@@ -861,8 +792,9 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   }, [damageProfile, bossTimersOpen]);
 
   const buffLanesHeight = buffLanes.length * BUFF_LANE_HEIGHT;
-  const bossAbilities = filterBossAbilities(damageProfile, encounterID);
-  const hasBossTimers = bossAbilities.length > 0;
+  const allBossAbilities = damageProfile ? getAllBossAbilities(damageProfile) : [];
+  const bossAbilities = allBossAbilities.filter((a) => !hiddenBossSpells.has(a.name));
+  const hasBossTimers = allBossAbilities.length > 0;
   const BOSS_HEADER_HEIGHT = hasBossTimers ? 24 : 0;
   const bossTimersHeight = hasBossTimers
     ? BOSS_HEADER_HEIGHT + (bossTimersOpen ? bossAbilities.length * BOSS_ROW_HEIGHT : 0)
@@ -1096,6 +1028,76 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
           </div>
         )}
       </div>
+
+      {/* Boss spell filter */}
+      {allBossAbilities.length > 0 && (
+      <div className="relative" ref={bossFilterRef}>
+        <button
+          onClick={() => setBossFilterOpen((v) => !v)}
+          className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--background)] transition-colors"
+        >
+          Boss Spells
+          {hiddenBossSpells.size > 0 && (
+            <span className="px-1.5 py-0.5 rounded-full bg-[#f85149] text-white text-[10px] leading-none">
+              {hiddenBossSpells.size}
+            </span>
+          )}
+        </button>
+        {bossFilterOpen && (
+          <div className="absolute z-50 top-full mt-1 left-0 w-72 max-h-72 overflow-y-auto bg-[var(--card)] border border-[var(--border)] rounded-lg shadow-lg p-2">
+            <div className="flex justify-between items-center mb-2 px-1">
+              <span className="text-[10px] text-[var(--muted)] uppercase tracking-wide">
+                {allBossAbilities.length - hiddenBossSpells.size}/{allBossAbilities.length} shown
+              </span>
+              <button
+                onClick={() => setHiddenBossSpells(hiddenBossSpells.size > 0 ? new Set() : new Set(allBossAbilities.map((a) => a.name)))}
+                className="text-[10px] text-[var(--accent)] hover:underline"
+              >
+                {hiddenBossSpells.size > 0 ? "Show all" : "Hide all"}
+              </button>
+            </div>
+            {allBossAbilities.map((ability, i) => {
+              const visible = !hiddenBossSpells.has(ability.name);
+              const color = BOSS_SPELL_COLORS[i % BOSS_SPELL_COLORS.length];
+              return (
+                <label
+                  key={ability.abilityGameID}
+                  className="flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--background)] cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    checked={visible}
+                    onChange={() => {
+                      setHiddenBossSpells((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(ability.name)) next.delete(ability.name);
+                        else next.add(ability.name);
+                        return next;
+                      });
+                    }}
+                    className="accent-[var(--accent)]"
+                  />
+                  {ability.icon && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={iconUrl(ability.icon)}
+                      alt=""
+                      width={16}
+                      height={16}
+                      className="rounded-sm flex-shrink-0"
+                    />
+                  )}
+                  <span className="text-xs flex-1 truncate" style={{ color }}>
+                    {ability.name}
+                  </span>
+                  <span className="text-[10px] text-[var(--muted)]">{ability.hitCount}x</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      )}
 
       {/* Chart type selectors */}
       <div className="flex items-center gap-1.5">
