@@ -420,7 +420,7 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   const [hoveredRevPeak, setHoveredRevPeak] = useState<{ timestamp: number; dtps: number; total5s: number; isPrimary: boolean } | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
   const [leftChart, setLeftChart] = useState<ChartType>("dtps");
-  const [rightChart, setRightChart] = useState<ChartType>("essence");
+  const [rightChart, setRightChart] = useState<ChartType>("echo-count");
   const [bossTimersOpen, setBossTimersOpen] = useState(false);
   const [hiddenBossSpells, setHiddenBossSpells] = useState<Set<string>>(() => {
     if (!encounterID) return new Set();
