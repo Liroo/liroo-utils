@@ -65,6 +65,24 @@ export function AnalyzePageClient({
     router.push(url, { scroll: false });
   };
 
+  // Callback for changing the main report while preserving compare
+  const handleMainReportChange = (code: string, fight: number | null, source: number | null) => {
+    const url = buildUrl(
+      { code, fight, source },
+      { code: compareCode, fight: compareFightId, source: compareSourceId }
+    );
+    router.push(url, { scroll: false });
+  };
+
+  // Callback for changing the compare report while preserving main
+  const handleCompareReportChange = (code: string, fight: number | null, source: number | null) => {
+    const url = buildUrl(
+      { code: reportCode, fight: fightId, source: sourceId },
+      { code, fight, source }
+    );
+    router.push(url, { scroll: false });
+  };
+
   // Callbacks for compare panel's fight/source selection
   const handleCompareFightSelect = (id: number) => {
     const url = buildUrl(
@@ -94,6 +112,7 @@ export function AnalyzePageClient({
                 reportCode={reportCode}
                 fightId={fightId}
                 sourceId={sourceId}
+                onReportChange={handleMainReportChange}
               />
             </div>
             <div className="flex flex-col min-w-0">
@@ -113,6 +132,7 @@ export function AnalyzePageClient({
                 sourceId={compareSourceId}
                 onFightSelect={handleCompareFightSelect}
                 onSourceSelect={handleCompareSourceSelect}
+                onReportChange={handleCompareReportChange}
               />
             </div>
           </div>

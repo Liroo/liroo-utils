@@ -20,6 +20,7 @@ interface ReportAnalysisProps {
   /** Override fight/source selection (for compare panel) */
   onFightSelect?: (id: number) => void;
   onSourceSelect?: (id: number) => void;
+  onReportChange?: (code: string, fight: number | null, source: number | null) => void;
 }
 
 export function ReportAnalysis({
@@ -28,6 +29,7 @@ export function ReportAnalysis({
   sourceId,
   onFightSelect,
   onSourceSelect,
+  onReportChange,
 }: ReportAnalysisProps) {
   const router = useRouter();
   const [input, setInput] = useState("");
@@ -82,6 +84,11 @@ export function ReportAnalysis({
     e.preventDefault();
     const parsed = parseWclUrl(input);
     if (!parsed.code) return;
+
+    if (onReportChange) {
+      onReportChange(parsed.code, parsed.fight, parsed.source);
+      return;
+    }
 
     let url = `/analyze/${parsed.code}`;
     const params = new URLSearchParams();
