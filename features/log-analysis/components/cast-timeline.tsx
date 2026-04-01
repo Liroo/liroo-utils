@@ -882,13 +882,44 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [durationS]);
 
-  // Mouse move
+  // Drag to pan
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartViewS = useRef(0);
+
+  const onMouseDown = useCallback((e: React.MouseEvent) => {
+    // Only left click, ignore if clicking on interactive elements
+    if (e.button !== 0) return;
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartViewS.current = viewStartRef.current;
+    e.preventDefault();
+  }, []);
+
   const onMouseMove = useCallback((e: React.MouseEvent) => {
     setMouseClientX(e.clientX);
+    if (isDragging.current) {
+      const dx = e.clientX - dragStartX.current;
+      const dS = dx / ppsRef.current;
+      const newStart = clampStart(dragStartViewS.current - dS, ppsRef.current);
+      targetStartRef.current = newStart;
+      startLerp();
+    }
+  }, [startLerp]);
+
+  const onMouseUp = useCallback(() => {
+    isDragging.current = false;
   }, []);
 
   const onMouseLeave = useCallback(() => {
-    // Keep last position — don't clear
+    isDragging.current = false;
+  }, []);
+
+  // Global mouseup to catch drag release outside viewport
+  useEffect(() => {
+    const onUp = () => { isDragging.current = false; };
+    window.addEventListener("mouseup", onUp);
+    return () => window.removeEventListener("mouseup", onUp);
   }, []);
 
   // Tick intervals based on zoom
@@ -1221,8 +1252,10 @@ export function CastTimeline({ data, actors, reportCode, fightId, sourceId, play
         <div
           ref={viewRef}
           className="flex-1 relative overflow-hidden select-none"
-          style={{ cursor: "crosshair", height: totalH }}
+          style={{ cursor: "grab", height: totalH }}
+          onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
           onMouseLeave={onMouseLeave}
         >
           {/* Icon row */}
